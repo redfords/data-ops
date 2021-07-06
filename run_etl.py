@@ -14,7 +14,8 @@ def create_df(file_name, cols, dtypes):
 def extract():
     movie = create_df('title.basics', [0,1,5,7,8], {'tconst': 'string', 'titleType': 'string', 'genres': 'string'})
     ratings = create_df('title.ratings', [0,1,2], {'tconst': 'string', 'averageRating': float, 'numVotes': int})
-    #crew = create_df('title.crew', [])
+    director = create_df('title.crew', [0,1], {'tconst': 'string', 'directors': 'string'})
+    writer = create_df('title.crew', [0,2], {'tconst': 'string', 'writers': 'string'})
 
     # keep movies only
     movie.drop(movie.loc[movie['titleType']!='movie'].index, inplace=True)
@@ -35,6 +36,24 @@ def extract():
     movie.genres = movie.genres.str.split(',')
     movie = movie.explode('genres')
 
+    # merge movie and director
+    movie_director = pd.merge(movie[['tconst', 'startYear', 'genres']], director, on='tconst')
+    
+    movie_director.directors = movie_director.directors.str.split(',')
+    movie_director = movie_director.explode('directors')
+
+    movie_director.drop(['tconst'], axis=1, inplace=True)
+    movie_director.drop_duplicates(inplace=True)
+
+    # merge movie and writer
+    movie_writer = pd.merge(movie[['tconst', 'startYear', 'genres']], writer, on='tconst')
+
+    movie_writer.writers = movie_writer.writers.str.split(',')
+    movie_writer = movie_writer.explode('writers')
+
+    movie_writer.drop(['tconst'], axis=1, inplace=True)
+    movie_writer.drop_duplicates(inplace=True)
+
     # merge movie and ratings
     movie_ratings = pd.merge(movie, ratings, on='tconst')
 
@@ -43,9 +62,11 @@ def extract():
         'runtimeMinutes': 'mean',
         'averageRating': 'mean',
         'numVotes': 'sum'}
-        ).reset_index()
+        ).reset_index()    
 
     print(g_movie_ratings.head(10))
+    print(movie_director.head())
+    print(movie_writer.head())
 
     
 

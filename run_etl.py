@@ -44,6 +44,7 @@ def extract():
 
     movie_director.drop(['tconst'], axis=1, inplace=True)
     movie_director.drop_duplicates(inplace=True)
+    movie_director = movie_director.groupby(['startYear', 'genres']).agg({'directors': 'count'}).reset_index()
 
     # merge movie and writer
     movie_writer = pd.merge(movie[['tconst', 'startYear', 'genres']], writer, on='tconst')
@@ -53,21 +54,23 @@ def extract():
 
     movie_writer.drop(['tconst'], axis=1, inplace=True)
     movie_writer.drop_duplicates(inplace=True)
+    movie_writer = movie_writer.groupby(['startYear', 'genres']).agg({'writers': 'count'}).reset_index()
 
     # merge movie and ratings
     movie_ratings = pd.merge(movie, ratings, on='tconst')
 
     # group and run aggregations
-    g_movie_ratings = movie_ratings.groupby(['startYear', 'genres']).agg({
+    movie_ratings = movie_ratings.groupby(['startYear', 'genres']).agg({
         'runtimeMinutes': 'mean',
         'averageRating': 'mean',
         'numVotes': 'sum'}
-        ).reset_index()    
+        ).reset_index()
 
-    print(g_movie_ratings.head(10))
-    print(movie_director.head())
-    print(movie_writer.head())
+    movie_ratings_d = pd.merge(movie_ratings, movie_director, on=['startYear', 'genres'])
+    movie_ratings_c = pd.merge(movie_ratings_d, movie_writer, on=['startYear', 'genres'])
+    
 
+    print(movie_ratings_c.head(10))
     
 
 extract()

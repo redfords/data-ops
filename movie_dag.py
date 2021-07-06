@@ -4,8 +4,6 @@ from airflow.operators.bash_operator import BashOperator
 from airflow.operators.python_operator import PythonOperator
 import pandas as pd
 
-
-
 # define the default dag arguments
 default_args = {
 	'owner': 'joana',

@@ -26,19 +26,19 @@ def group_by(data, column):
 def extract():
     movie = create_df('title.basics', [0,1,5,7,8], {'tconst': 'string', 'titleType': 'string', 'genres': 'string'})
 
-    # keep movies only
+    # filter by format
     movie = movie[movie['titleType'] == 'movie']
-    # movie.drop(movie.loc[movie['titleType']!='movie'].index, inplace=True)
     movie.drop(['titleType'], axis=1, inplace=True)
 
-    # keep movies released between 2015 and 2020
+    # filter by release date
     years = ['2015', '2016', '2017', '2018', '2019', '2020']
     movie = movie[movie['startYear'].isin(years)]
     movie.reset_index(drop=True, inplace=True)
 
     # fill in missing values
     movie['runtimeMinutes'] = pd.to_numeric(movie['runtimeMinutes'], errors='coerce')
-    movie['runtimeMinutes'].fillna(int(movie['runtimeMinutes'].mean()), inplace=True)
+    runtime_mean = movie['runtimeMinutes'].mean()
+    movie['runtimeMinutes'].fillna(int(runtime_mean), inplace=True)
 
     # add genre column
     movie['genres'] = movie['genres'].str.lower()

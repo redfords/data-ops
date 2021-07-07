@@ -7,7 +7,11 @@ import extract
 import transform
 
 def run_etl():
-    movie = extract.create_df('https://datasets.imdbws.com/title.basics.tsv.gz', [0,1,5,7,8])
+    movie_url = 'https://datasets.imdbws.com/title.basics.tsv.gz'
+    crew_url = 'https://datasets.imdbws.com/title.crew.tsv.gz'
+    ratings_url = 'https://datasets.imdbws.com/title.ratings.tsv.gz'
+
+    movie = extract.create_df(movie_url, [0,1,5,7,8])
 
     # filter by format
     movie = movie[movie['titleType'] == 'movie']
@@ -28,14 +32,14 @@ def run_etl():
     movie['genres'] = movie['genres'].str.replace(r'\\n', 'other', regex=True)
     movie = transform.list_to_row(movie, 'genres')
 
-    director = extract.create_df('https://datasets.imdbws.com/title.crew.tsv.gz', [0,1])
-    writer = extract.create_df('https://datasets.imdbws.com/title.crew.tsv.gz', [0,2])
+    director = extract.create_df(crew_url, [0,1])
+    writer = extract.create_df(crew_url, [0,2])
 
     # merge crew and movie
     movie_director = pd.merge(movie[['tconst', 'startYear', 'genres']], director, on='tconst')
     movie_writer = pd.merge(movie[['tconst', 'startYear', 'genres']], writer, on='tconst')
 
-    # add director and writer column
+    # add director and writer
     movie_director = transform.list_to_row(movie_director, 'directors')
     movie_writer = transform.list_to_row(movie_writer, 'writers')
 
@@ -43,7 +47,7 @@ def run_etl():
     movie_director = transform.group_by(movie_director, 'directors')
     movie_writer = transform.group_by(movie_writer, 'writers')
 
-    ratings = extract.create_df('https://datasets.imdbws.com/title.ratings.tsv.gz', [0,1,2])
+    ratings = extract.create_df(ratings_url, [0,1,2])
 
     # merge movie and ratings
     movie_ratings = pd.merge(movie, ratings, on='tconst')
@@ -55,7 +59,7 @@ def run_etl():
         'numVotes': 'sum'}
         ).reset_index()
 
-    # add director and writer
+    # add director and writer group
     movie_ratings = pd.merge(movie_ratings, movie_director, on=['startYear', 'genres'], how='left').fillna(0)
     movie_ratings = pd.merge(movie_ratings, movie_writer, on=['startYear', 'genres'], how='left').fillna(0)
     
@@ -64,8 +68,7 @@ def run_etl():
     movie_ratings[columns] = movie_ratings[columns].round(2)
     movie_ratings['startYear'] = pd.to_numeric(movie_ratings['startYear'], errors='coerce')
 
-    print(movie_ratings.head(100))
-
+    # load into .csv
     movie_ratings.to_csv('/home/joana/airflow/dags/resultados.csv', index=False)
 
 
@@ -95,4 +98,3 @@ task1 =  PythonOperator(
 	python_callable = run_etl,
 	dag = dag
 	)
-

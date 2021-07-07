@@ -21,6 +21,10 @@ def group_by(data, column):
     data = data.groupby(['startYear', 'genres']).agg({column: 'count'}).reset_index()
     return data  
 
+def rename_cols(data, cols):
+    data.rename(columns = cols, inplace = True)
+    return data
+
 def extract():
     movie_url = 'https://datasets.imdbws.com/title.basics.tsv.gz'
     crew_url = 'https://datasets.imdbws.com/title.crew.tsv.gz'
@@ -77,6 +81,10 @@ def extract():
     # add director and writer
     movie_ratings = pd.merge(movie_ratings, movie_director, on=['startYear', 'genres'], how='left').fillna(0)
     movie_ratings = pd.merge(movie_ratings, movie_writer, on=['startYear', 'genres'], how='left').fillna(0)
+
+    # rename columns
+    columns = {'directors':'numDirectors', 'writers':'numWriters'}
+    movie_ratings = rename_cols(movie_ratings, columns)
     
     # round and change data type
     columns = ['runtimeMinutes', 'averageRating']

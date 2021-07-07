@@ -11,3 +11,7 @@ def group_by(data, column):
     data.drop_duplicates(inplace=True)
     data = data.groupby(['startYear', 'genres']).agg({column: 'count'}).reset_index()
     return data
+
+def rename_cols(data, cols):
+    data.rename(columns = cols, inplace = True)
+    return data

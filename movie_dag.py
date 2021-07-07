@@ -27,7 +27,7 @@ def run_etl():
     runtime_mean = movie['runtimeMinutes'].mean()
     movie['runtimeMinutes'].fillna(int(runtime_mean), inplace=True)
 
-    # add genre column
+    # convert genre to rows
     movie['genres'] = movie['genres'].str.lower()
     movie['genres'] = movie['genres'].str.replace(r'\\n', 'other', regex=True)
     movie = transform.list_to_row(movie, 'genres')
@@ -39,7 +39,7 @@ def run_etl():
     movie_director = pd.merge(movie[['tconst', 'startYear', 'genres']], director, on='tconst')
     movie_writer = pd.merge(movie[['tconst', 'startYear', 'genres']], writer, on='tconst')
 
-    # add director and writer
+    # convert director and writer to rows
     movie_director = transform.list_to_row(movie_director, 'directors')
     movie_writer = transform.list_to_row(movie_writer, 'writers')
 
@@ -59,9 +59,13 @@ def run_etl():
         'numVotes': 'sum'}
         ).reset_index()
 
-    # add director and writer group
+    # merge director and writer
     movie_ratings = pd.merge(movie_ratings, movie_director, on=['startYear', 'genres'], how='left').fillna(0)
     movie_ratings = pd.merge(movie_ratings, movie_writer, on=['startYear', 'genres'], how='left').fillna(0)
+
+    # rename columns
+    columns = {'directors':'numDirectors', 'writers':'numWriters'}
+    movie_ratings = transform.rename_cols(movie_ratings, columns)
     
     # round and change data type
     columns = ['runtimeMinutes', 'averageRating']

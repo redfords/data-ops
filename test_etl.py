@@ -1,14 +1,15 @@
 import pandas as pd
 pd.options.mode.chained_assignment = None
+import wget
 
-def extract_from_tsv(file_name, cols, dtypes):
+def extract_from_tsv(file_name, cols):
     file = file_name + ".tsv.gz"
-    df = pd.read_csv(file, compression='gzip', sep='\t', usecols=cols, dtype=dtypes)
+    df = pd.read_csv(file, compression='gzip', sep='\t', usecols=cols)
     return df
 
-def create_df(file_name, cols, dtypes):
+def create_df(file_name, cols):
     df = pd.DataFrame()
-    df = extract_from_tsv(file_name, cols, dtypes)
+    df = extract_from_tsv(file_name, cols)
     return df
 
 def list_to_row(data, column):
@@ -22,9 +23,18 @@ def group_by(data, column):
     data = data.groupby(['startYear', 'genres']).agg({column: 'count'}).reset_index()
     return data  
 
+def download_files():
+    url = {
+        'https://datasets.imdbws.com/title.basics.tsv.gz': 'title.basics.tsv.gz',
+        'https://datasets.imdbws.com/title.crew.tsv.gz': 'title.crew.tsv.gz',
+        'https://datasets.imdbws.com/title.ratings.tsv.gz': 'title.ratings.tsv.gz'
+    }
+
+    for key, value in url.items():
+        wget.download(key, value)
 
 def extract():
-    movie = create_df('title.basics', [0,1,5,7,8], {'tconst': 'string', 'titleType': 'string', 'genres': 'string'})
+    movie = create_df('title.basics', [0,1,5,7,8])
 
     # filter by format
     movie = movie[movie['titleType'] == 'movie']
@@ -45,8 +55,8 @@ def extract():
     movie['genres'] = movie['genres'].str.replace(r'\\n', 'other', regex=True)
     movie = list_to_row(movie, 'genres')
 
-    director = create_df('title.crew', [0,1], {'tconst': 'string', 'directors': 'string'})
-    writer = create_df('title.crew', [0,2], {'tconst': 'string', 'writers': 'string'})
+    director = create_df('title.crew', [0,1])
+    writer = create_df('title.crew', [0,2])
 
     # merge crew and movie
     movie_director = pd.merge(movie[['tconst', 'startYear', 'genres']], director, on='tconst')
@@ -60,7 +70,7 @@ def extract():
     movie_director = group_by(movie_director, 'directors')
     movie_writer = group_by(movie_writer, 'writers')
 
-    ratings = create_df('title.ratings', [0,1,2], {'tconst': 'string', 'averageRating': float, 'numVotes': int})
+    ratings = create_df('title.ratings', [0,1,2])
 
     # merge movie and ratings
     movie_ratings = pd.merge(movie, ratings, on='tconst')
@@ -85,4 +95,6 @@ def extract():
 
     movie_ratings.to_csv('resultados.csv', index=False)
 
+
+download_files()
 extract()

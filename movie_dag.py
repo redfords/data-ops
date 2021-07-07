@@ -13,21 +13,21 @@ def run_etl():
 
     movie = extract.create_df(movie_url, [0,1,5,7,8])
 
-    # filter by format
+    # Filter by format
     movie = movie[movie['titleType'] == 'movie']
     movie.drop(['titleType'], axis=1, inplace=True)
 
-    # filter by release date
+    # Filter by release date
     years = ['2015', '2016', '2017', '2018', '2019', '2020']
     movie = movie[movie['startYear'].isin(years)]
     movie.reset_index(drop=True, inplace=True)
 
-    # fill in missing values
+    # Fill in missing rows
     movie['runtimeMinutes'] = pd.to_numeric(movie['runtimeMinutes'], errors='coerce')
     runtime_mean = movie['runtimeMinutes'].mean()
     movie['runtimeMinutes'].fillna(int(runtime_mean), inplace=True)
 
-    # convert genre to rows
+    # Convert genre to rows
     movie['genres'] = movie['genres'].str.lower()
     movie['genres'] = movie['genres'].str.replace(r'\\n', 'other', regex=True)
     movie = transform.list_to_row(movie, 'genres')
@@ -35,48 +35,44 @@ def run_etl():
     director = extract.create_df(crew_url, [0,1])
     writer = extract.create_df(crew_url, [0,2])
 
-    # merge crew and movie
+    # Merge crew and movie
     movie_director = pd.merge(movie[['tconst', 'startYear', 'genres']], director, on='tconst')
     movie_writer = pd.merge(movie[['tconst', 'startYear', 'genres']], writer, on='tconst')
 
-    # convert director and writer to rows
+    # Convert director and writer to rows
     movie_director = transform.list_to_row(movie_director, 'directors')
     movie_writer = transform.list_to_row(movie_writer, 'writers')
 
-    # group by year and genre
+    # Group by year and genre
     movie_director = transform.group_by(movie_director, 'directors')
     movie_writer = transform.group_by(movie_writer, 'writers')
 
     ratings = extract.create_df(ratings_url, [0,1,2])
 
-    # merge movie and ratings
     movie_ratings = pd.merge(movie, ratings, on='tconst')
 
-    # group and run aggregations
+    # Group and run aggregations
     movie_ratings = movie_ratings.groupby(['startYear', 'genres']).agg({
         'runtimeMinutes': 'mean',
         'averageRating': 'mean',
         'numVotes': 'sum'}
         ).reset_index()
 
-    # merge director and writer
     movie_ratings = pd.merge(movie_ratings, movie_director, on=['startYear', 'genres'], how='left').fillna(0)
     movie_ratings = pd.merge(movie_ratings, movie_writer, on=['startYear', 'genres'], how='left').fillna(0)
 
-    # rename columns
+    # Rename columns
     columns = {'directors':'numDirectors', 'writers':'numWriters'}
     movie_ratings = transform.rename_cols(movie_ratings, columns)
     
-    # round and change data type
+    # Fix data type
     columns = ['runtimeMinutes', 'averageRating']
     movie_ratings[columns] = movie_ratings[columns].round(2)
     movie_ratings['startYear'] = pd.to_numeric(movie_ratings['startYear'], errors='coerce')
 
-    # load into .csv
+    # Load into .csv
     movie_ratings.to_csv('/home/joana/airflow/dags/resultados.csv', index=False)
 
-
-# define the default dag arguments
 default_args = {
 	'owner': 'joana',
 	'depends_on_past': False,
@@ -87,7 +83,6 @@ default_args = {
 	'retry_delay': timedelta(minutes = 1)
 	}
 
-# define the dag, start date and frequency
 dag = DAG(
 	dag_id = 'movie_dag',
 	default_args = default_args,
@@ -95,7 +90,6 @@ dag = DAG(
 	schedule_interval = timedelta(minutes = 1440)
 	)
 
-# run etl process
 task1 =  PythonOperator(
 	task_id = 'run_etl',
 	provide_context = True,

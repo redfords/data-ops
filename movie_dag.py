@@ -3,22 +3,11 @@ from airflow import DAG
 from airflow.operators.python_operator import PythonOperator
 import pandas as pd
 pd.options.mode.chained_assignment = None
-import wget
 import extract
 import transform
 
-def download_files():
-    url = {
-        'https://datasets.imdbws.com/title.basics.tsv.gz': 'title.basics.tsv.gz',
-        'https://datasets.imdbws.com/title.crew.tsv.gz': 'title.crew.tsv.gz',
-        'https://datasets.imdbws.com/title.ratings.tsv.gz': 'title.ratings.tsv.gz'
-    }
-
-    for key, value in url.items():
-        wget.download(key, value)
-
 def run_etl():
-    movie = extract.create_df('title.basics', [0,1,5,7,8])
+    movie = extract.create_df('https://datasets.imdbws.com/title.basics.tsv.gz', [0,1,5,7,8])
 
     # filter by format
     movie = movie[movie['titleType'] == 'movie']
@@ -39,8 +28,8 @@ def run_etl():
     movie['genres'] = movie['genres'].str.replace(r'\\n', 'other', regex=True)
     movie = transform.list_to_row(movie, 'genres')
 
-    director = extract.create_df('title.crew', [0,1])
-    writer = extract.create_df('title.crew', [0,2])
+    director = extract.create_df('https://datasets.imdbws.com/title.crew.tsv.gz', [0,1])
+    writer = extract.create_df('https://datasets.imdbws.com/title.crew.tsv.gz', [0,2])
 
     # merge crew and movie
     movie_director = pd.merge(movie[['tconst', 'startYear', 'genres']], director, on='tconst')
@@ -54,7 +43,7 @@ def run_etl():
     movie_director = transform.group_by(movie_director, 'directors')
     movie_writer = transform.group_by(movie_writer, 'writers')
 
-    ratings = extract.create_df('title.ratings', [0,1,2])
+    ratings = extract.create_df('https://datasets.imdbws.com/title.ratings.tsv.gz', [0,1,2])
 
     # merge movie and ratings
     movie_ratings = pd.merge(movie, ratings, on='tconst')
@@ -77,7 +66,7 @@ def run_etl():
 
     print(movie_ratings.head(100))
 
-    movie_ratings.to_csv('resultados.csv', index=False)
+    movie_ratings.to_csv('/home/joana/airflow/dags/resultados.csv', index=False)
 
 
 # define the default dag arguments
@@ -99,21 +88,11 @@ dag = DAG(
 	schedule_interval = timedelta(minutes = 1440)
 	)
 
-# get imdb datasets
-task1 =  PythonOperator(
-	task_id = 'download_files',
-	provide_context = True,
-	python_callable = download_files,
-	dag = dag
-	)
-
 # run etl process
-task2 =  PythonOperator(
+task1 =  PythonOperator(
 	task_id = 'run_etl',
 	provide_context = True,
 	python_callable = run_etl,
 	dag = dag
 	)
 
-# task hierarchy
-task1 >> task2

@@ -93,7 +93,7 @@ default_args = {
 
 # define the dag, start date and frequency
 dag = DAG(
-	dag_id = 'stock_dag',
+	dag_id = 'movie_dag',
 	default_args = default_args,
 	start_date = datetime(2021,7,7),
 	schedule_interval = timedelta(minutes = 1440)

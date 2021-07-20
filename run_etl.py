@@ -1,79 +1,98 @@
 import pandas as pd
 pd.options.mode.chained_assignment = None
+import extract as e
+import transform as t
 
-def extract_from_tsv(file_name, cols, dtypes):
-    file = file_name + ".tsv.gz"
-    df = pd.read_csv(file, compression='gzip', sep='\t', usecols=cols, dtype=dtypes)
-    return df
+def run_etl():
+    
+    # Create df from datasets
+    movie = e.create_df('movie')
+    director = e.create_df('director')
+    writer = e.create_df('writer')
+    ratings = e.create_df('ratings')
+    name = e.create_df('name')
 
-def create_df(file_name, cols, dtypes):
-    df = pd.DataFrame()
-    df = extract_from_tsv(file_name, cols, dtypes)
-    return df
-
-def extract():
-    movie = create_df('title.basics', [0,1,5,7,8], {'tconst': 'string', 'titleType': 'string', 'genres': 'string'})
-    ratings = create_df('title.ratings', [0,1,2], {'tconst': 'string', 'averageRating': float, 'numVotes': int})
-    director = create_df('title.crew', [0,1], {'tconst': 'string', 'directors': 'string'})
-    writer = create_df('title.crew', [0,2], {'tconst': 'string', 'writers': 'string'})
-
-    # keep movies only
-    movie.drop(movie.loc[movie['titleType']!='movie'].index, inplace=True)
+    # Filter by format
+    movie = movie[movie['titleType'] == 'movie']
     movie.drop(['titleType'], axis=1, inplace=True)
 
-    # keep movies released between 2015 and 2020
+    # Filter by release date
     years = ['2015', '2016', '2017', '2018', '2019', '2020']
     movie = movie[movie['startYear'].isin(years)]
- 
-    # reset df index
     movie.reset_index(drop=True, inplace=True)
 
-    # fill in missing values
-    movie['runtimeMinutes'] = pd.to_numeric(movie['runtimeMinutes'], errors='coerce')
-    movie['runtimeMinutes'].fillna(int(movie['runtimeMinutes'].mean()), inplace=True)
+    # Fix missing values
+    movie['runtimeMinutes'] = pd.to_numeric(
+        movie['runtimeMinutes'],
+        errors='coerce')
+    movie.dropna(subset = ['runtimeMinutes'], inplace=True)
 
-    # add genre column
-    movie.genres = movie.genres.str.split(',')
-    movie = movie.explode('genres')
+    movie['genres'] = movie['genres'].str.lower()
+    movie['genres'] = movie['genres'].str.replace(
+        r'\\n','other', regex=True)
 
-    # merge movie and director
-    movie_director = pd.merge(movie[['tconst', 'startYear', 'genres']], director, on='tconst')
+    # Split column into rows
+    movie = t.list_to_row(movie, 'genres')
     
-    movie_director.directors = movie_director.directors.str.split(',')
-    movie_director = movie_director.explode('directors')
+    # Merge crew and movie
+    movie_director = t.merge(movie, director)
+    movie_writer = t.merge(movie, writer)
 
-    movie_director.drop(['tconst'], axis=1, inplace=True)
-    movie_director.drop_duplicates(inplace=True)
-    movie_director = movie_director.groupby(['startYear', 'genres']).agg({'directors': 'count'}).reset_index()
+    # Fix missing values
+    movie_director['directors'] = movie_director['directors'].str.lower()
+    movie_director = movie_director[
+        ~movie_director['directors'].str.contains(r'\\n')]
 
-    # merge movie and writer
-    movie_writer = pd.merge(movie[['tconst', 'startYear', 'genres']], writer, on='tconst')
+    movie_writer['writers'] = movie_writer['writers'].str.lower()
+    movie_writer = movie_writer[
+        ~movie_writer['writers'].str.contains(r'\\n')]
 
-    movie_writer.writers = movie_writer.writers.str.split(',')
-    movie_writer = movie_writer.explode('writers')
+    # Split director and writer into rows
+    movie_director = t.list_to_row(movie_director, 'directors')
+    movie_writer = t.list_to_row(movie_writer, 'writers')
 
-    movie_writer.drop(['tconst'], axis=1, inplace=True)
-    movie_writer.drop_duplicates(inplace=True)
-    movie_writer = movie_writer.groupby(['startYear', 'genres']).agg({'writers': 'count'}).reset_index()
-
-    # merge movie and ratings
-    movie_ratings = pd.merge(movie, ratings, on='tconst')
-
-    # group and run aggregations
-    movie_ratings = movie_ratings.groupby(['startYear', 'genres']).agg({
-        'runtimeMinutes': 'mean',
-        'averageRating': 'mean',
-        'numVotes': 'sum'}
-        ).reset_index()
-
-    movie_ratings_d = pd.merge(movie_ratings, movie_director, on=['startYear', 'genres'])
-    movie_ratings_c = pd.merge(movie_ratings_d, movie_writer, on=['startYear', 'genres'])
+    # Get top directors by year and genre
+    top_director = t.group_by_count(movie_director, 'tconst')
     
+    # Merge director and name
+    columns = {'nconst': 'directors', 'primaryName': 'name'}
+    name = t.rename_cols(name, columns)
 
-    print(movie_ratings_c.head(10))
+    top_director = pd.merge(
+        name[['directors','name']],
+        top_director[['directors','startYear','genres']],
+        on='directors')
+
+    top_director.drop(['directors'], axis=1, inplace=True)
     
+    top_director = t.group_by_join(top_director)
 
-extract()
+    # Group by year and genre
+    movie_director = t.group_by(movie_director, 'directors')
+    movie_writer = t.group_by(movie_writer, 'writers')
 
+    # Group and run aggregations
+    movie_ratings = pd.merge(
+        movie, ratings,
+        on='tconst')
 
+    movie_ratings = t.group_by_sum(movie_ratings)
 
+    movie_ratings = t.merge_left(movie_ratings, movie_director)
+    movie_ratings = t.merge_left(movie_ratings, movie_writer)
+    movie_ratings = t.merge_left(movie_ratings, top_director)
+
+    # Rename columns
+    columns = {'directors':'numDirectors', 'writers':'numWriters'}
+    movie_ratings = t.rename_cols(movie_ratings, columns)
+    
+    # Fix data type
+    columns = ['runtimeMinutes', 'averageRating']
+    movie_ratings[columns] = movie_ratings[columns].round(2)
+    movie_ratings['startYear'] = pd.to_numeric(
+        movie_ratings['startYear'], errors='coerce')
+
+    # Load into .csv
+    movie_ratings.to_csv('/home/joana/airflow/dags/resultados.csv', index=False)
+
+run_etl()

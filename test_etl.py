@@ -44,7 +44,7 @@ def run_etl():
     ratings = e.create_df('ratings')
 
     # Join into single df
-    result = movie.join(
+    joined_data = movie.join(
         ratings.set_index('tconst'), on='tconst', how='inner'
         ).join(
         director.set_index('tconst'), on='tconst', how='left'
@@ -52,13 +52,11 @@ def run_etl():
         writer.set_index('tconst'), on='tconst', how='left'
     )
 
-    result.to_csv('/home/joana/airflow/dags/join.csv', index=False)    
-
     # Create name df
     name = e.create_df('name')
 
     # Get top directors by year and genre
-    top_director = result[['tconst', 'startYear', 'genres', 'directors']]
+    top_director = joined_data[['tconst', 'startYear', 'genres', 'directors']]
     top_director.drop_duplicates(inplace=True)
     top_director = t.group_by_count(top_director, 'tconst')
     top_director = top_director.join(
@@ -67,17 +65,33 @@ def run_etl():
     top_director.drop(['directors'], axis=1, inplace=True)
     top_director = t.group_by_join(top_director)
 
-    # Run aggregations
+    # Run aggregations count distinct
     aggregate = {
-        'runtimeMinutes': 'mean',
-        'averageRating': 'mean',
-        'numVotes': 'sum',
         'directors': 'nunique',
         'writers': 'nunique'
     }
 
-    result = result.groupby(
+    result = joined_data.groupby(
         ['startYear', 'genres']).agg(aggregate).reset_index()
+
+    # Run aggregations sum and mean
+    joined_data.drop(['directors', 'writers'], axis=1, inplace=True)
+    joined_data.drop_duplicates(inplace=True)
+    joined_data.to_csv('/home/joana/airflow/dags/joined.csv', index=False)
+
+    aggregate = {
+        'runtimeMinutes': 'mean',
+        'averageRating': 'mean',
+        'numVotes': 'sum',
+    }
+
+    result_ratings = joined_data.groupby(
+        ['startYear', 'genres']).agg(aggregate).reset_index()
+
+    # Add ratings data
+    result = pd.merge(
+        result, result_ratings, on=['startYear', 'genres'], how='left'
+    )
   
     # Fix data type
     columns = ['runtimeMinutes', 'averageRating']
@@ -96,6 +110,19 @@ def run_etl():
     }
     result = t.rename_cols(result, columns)
 
-    result.to_csv('/home/joana/airflow/dags/resultados6.csv', index=False)
+    # Reorder columns
+    columns = [
+        'startYear',
+        'genres',
+        'runtimeMinutes',
+        'averageRating',
+        'numVotes',
+        'numDirectors',
+        'numWriters',
+        'topDirectors'
+    ]
+    result = result[columns]
+
+    result.to_csv('/home/joana/airflow/dags/resultados.csv', index=False)
 
 run_etl()

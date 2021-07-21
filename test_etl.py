@@ -1,100 +1,101 @@
 import pandas as pd
 pd.options.mode.chained_assignment = None
+import extract as e
+import transform as t
 
-def extract_from_tsv(url, cols):
-    df = pd.read_csv(url, compression='gzip', sep='\t', usecols=cols)
-    return df
+def run_etl():
+    
+    # Create movie df
+    movie = e.create_df('movie')
 
-def create_df(url, cols):
-    df = pd.DataFrame()
-    df = extract_from_tsv(url, cols)
-    return df
-
-def list_to_row(data, column):
-    data[column] = data[column].str.split(',')
-    data = data.explode(column)
-    return data
-
-def group_by(data, column):
-    data.drop(['tconst'], axis=1, inplace=True)
-    data.drop_duplicates(inplace=True)
-    data = data.groupby(['startYear', 'genres']).agg({column: 'count'}).reset_index()
-    return data  
-
-def rename_cols(data, cols):
-    data.rename(columns = cols, inplace = True)
-    return data
-
-def extract():
-    movie_url = 'https://datasets.imdbws.com/title.basics.tsv.gz'
-    crew_url = 'https://datasets.imdbws.com/title.crew.tsv.gz'
-    ratings_url = 'https://datasets.imdbws.com/title.ratings.tsv.gz'
-
-    movie = create_df(movie_url, [0,1,5,7,8])
-
-    # filter by format
+    # Filter by format
     movie = movie[movie['titleType'] == 'movie']
     movie.drop(['titleType'], axis=1, inplace=True)
 
-    # filter by release date
-    years = ['2015', '2016', '2017', '2018', '2019', '2020']
-    movie = movie[movie['startYear'].isin(years)]
-    movie.reset_index(drop=True, inplace=True)
+    # Fix missing data
+    movie.dropna(subset=['startYear', 'runtimeMinutes'], inplace=True)
+    movie['genres'].fillna('Other', inplace=True)
 
-    # fill in missing values
-    movie['runtimeMinutes'] = pd.to_numeric(movie['runtimeMinutes'], errors='coerce')
-    runtime_mean = movie['runtimeMinutes'].mean()
-    movie['runtimeMinutes'].fillna(int(runtime_mean), inplace=True)
+    # Change dtype
+    movie['startYear'] = movie['startYear'].astype('int')
+    movie['runtimeMinutes'] = movie['runtimeMinutes'].astype(float)
 
-    # add genre column
-    movie['genres'] = movie['genres'].str.lower()
-    movie['genres'] = movie['genres'].str.replace(r'\\n', 'other', regex=True)
-    movie = list_to_row(movie, 'genres')
+    # Filter by release date
+    condition = (movie['startYear'] >= 2015) & (movie['startYear'] <= 2020)
+    movie = movie[condition]
 
-    director = create_df(crew_url, [0,1])
-    writer = create_df(crew_url, [0,2])
+    # Split column into rows
+    movie = t.list_to_row(movie, 'genres')
 
-    # merge crew and movie
-    movie_director = pd.merge(movie[['tconst', 'startYear', 'genres']], director, on='tconst')
-    movie_writer = pd.merge(movie[['tconst', 'startYear', 'genres']], writer, on='tconst')
+    # Create crew df
+    crew = e.create_df('crew')
 
-    # add director and writer column
-    movie_director = list_to_row(movie_director, 'directors')
-    movie_writer = list_to_row(movie_writer, 'writers')
+    director = crew[['tconst', 'directors']]
+    director.dropna(subset=['directors'], inplace=True)
 
-    # group by year and genre
-    movie_director = group_by(movie_director, 'directors')
-    movie_writer = group_by(movie_writer, 'writers')
+    writer = crew[['tconst', 'writers']]
+    writer.dropna(subset=['writers'], inplace=True)
 
-    ratings = create_df(ratings_url, [0,1,2])
+    # Split column into rows
+    director = t.list_to_row(director, 'directors')
+    writer = t.list_to_row(writer, 'writers')
 
-    # merge movie and ratings
-    movie_ratings = pd.merge(movie, ratings, on='tconst')
+    # Create ratings df
+    ratings = e.create_df('ratings')
 
-    # group and run aggregations
-    movie_ratings = movie_ratings.groupby(['startYear', 'genres']).agg({
+    # Join into single df
+    result = movie.join(
+        ratings.set_index('tconst'), on='tconst', how='inner'
+        ).join(
+        director.set_index('tconst'), on='tconst', how='left'
+        ).join(
+        writer.set_index('tconst'), on='tconst', how='left'
+    )
+
+    result.to_csv('/home/joana/airflow/dags/join.csv', index=False)    
+
+    # Create name df
+    name = e.create_df('name')
+
+    # Get top directors by year and genre
+    top_director = result[['tconst', 'startYear', 'genres', 'directors']]
+    top_director.drop_duplicates(inplace=True)
+    top_director = t.group_by_count(top_director, 'tconst')
+    top_director = top_director.join(
+        name.set_index('nconst'), on='directors', how='inner'
+    )
+    top_director.drop(['directors'], axis=1, inplace=True)
+    top_director = t.group_by_join(top_director)
+
+    # Run aggregations
+    aggregate = {
         'runtimeMinutes': 'mean',
         'averageRating': 'mean',
-        'numVotes': 'sum'}
-        ).reset_index()
+        'numVotes': 'sum',
+        'directors': 'nunique',
+        'writers': 'nunique'
+    }
 
-    # add director and writer
-    movie_ratings = pd.merge(movie_ratings, movie_director, on=['startYear', 'genres'], how='left').fillna(0)
-    movie_ratings = pd.merge(movie_ratings, movie_writer, on=['startYear', 'genres'], how='left').fillna(0)
-
-    # rename columns
-    columns = {'directors':'numDirectors', 'writers':'numWriters'}
-    movie_ratings = rename_cols(movie_ratings, columns)
-    
-    # round and change data type
+    result = result.groupby(
+        ['startYear', 'genres']).agg(aggregate).reset_index()
+  
+    # Fix data type
     columns = ['runtimeMinutes', 'averageRating']
-    movie_ratings[columns] = movie_ratings[columns].round(2)
-    movie_ratings['startYear'] = pd.to_numeric(movie_ratings['startYear'], errors='coerce')
+    result[columns] = result[columns].round(2)
 
-    print(movie_ratings.head(100))
+    # Add top directors
+    result = pd.merge(
+        result, top_director, on=['startYear', 'genres'], how='left'
+    )
 
-    movie_ratings.to_csv('resultados.csv', index=False)
+    # Rename columns
+    columns = {
+        'directors':'numDirectors',
+        'writers':'numWriters',
+        'primaryName': 'topDirectors'
+    }
+    result = t.rename_cols(result, columns)
 
+    result.to_csv('/home/joana/airflow/dags/resultados6.csv', index=False)
 
-
-extract()
+run_etl()

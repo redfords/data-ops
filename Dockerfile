@@ -10,7 +10,3 @@ COPY movie_dag.py   \
      extract.py     \
      transform.py   \
      /home/airflow/dags
-
-RUN airflow initdb
-
-ENTRYPOINT airflow scheduler & airflow webserver --port 8080

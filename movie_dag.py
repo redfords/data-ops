@@ -3,75 +3,129 @@ from airflow import DAG
 from airflow.operators.python_operator import PythonOperator
 import pandas as pd
 pd.options.mode.chained_assignment = None
-import extract
-import transform
+import extract as e
+import transform as t
 
 def run_etl():
-    movie_url = 'https://datasets.imdbws.com/title.basics.tsv.gz'
-    crew_url = 'https://datasets.imdbws.com/title.crew.tsv.gz'
-    ratings_url = 'https://datasets.imdbws.com/title.ratings.tsv.gz'
-
-    movie = extract.create_df(movie_url, [0,1,5,7,8])
+    
+    # Create movie df
+    movie = e.create_df('movie')
 
     # Filter by format
     movie = movie[movie['titleType'] == 'movie']
     movie.drop(['titleType'], axis=1, inplace=True)
 
+    # Fix missing data
+    movie.dropna(subset=['startYear', 'runtimeMinutes'], inplace=True)
+    movie['genres'].fillna('Other', inplace=True)
+
+    # Change dtype
+    movie['startYear'] = movie['startYear'].astype('int')
+    movie['runtimeMinutes'] = movie['runtimeMinutes'].astype(float)
+
     # Filter by release date
-    years = ['2015', '2016', '2017', '2018', '2019', '2020']
-    movie = movie[movie['startYear'].isin(years)]
-    movie.reset_index(drop=True, inplace=True)
+    condition = (movie['startYear'] >= 2015) & (movie['startYear'] <= 2020)
+    movie = movie[condition]
 
-    # Fill in missing rows
-    movie['runtimeMinutes'] = pd.to_numeric(movie['runtimeMinutes'], errors='coerce')
-    runtime_mean = movie['runtimeMinutes'].mean()
-    movie['runtimeMinutes'].fillna(int(runtime_mean), inplace=True)
+    # Split column into rows
+    movie = t.list_to_row(movie, 'genres')
 
-    # Convert genre to rows
-    movie['genres'] = movie['genres'].str.lower()
-    movie['genres'] = movie['genres'].str.replace(r'\\n', 'other', regex=True)
-    movie = transform.list_to_row(movie, 'genres')
+    # Create crew df
+    crew = e.create_df('crew')
 
-    director = extract.create_df(crew_url, [0,1])
-    writer = extract.create_df(crew_url, [0,2])
+    director = crew[['tconst', 'directors']]
+    director.dropna(subset=['directors'], inplace=True)
 
-    # Merge crew and movie
-    movie_director = pd.merge(movie[['tconst', 'startYear', 'genres']], director, on='tconst')
-    movie_writer = pd.merge(movie[['tconst', 'startYear', 'genres']], writer, on='tconst')
+    writer = crew[['tconst', 'writers']]
+    writer.dropna(subset=['writers'], inplace=True)
 
-    # Convert director and writer to rows
-    movie_director = transform.list_to_row(movie_director, 'directors')
-    movie_writer = transform.list_to_row(movie_writer, 'writers')
+    # Split column into rows
+    director = t.list_to_row(director, 'directors')
+    writer = t.list_to_row(writer, 'writers')
 
-    # Group by year and genre
-    movie_director = transform.group_by(movie_director, 'directors')
-    movie_writer = transform.group_by(movie_writer, 'writers')
+    # Create ratings df
+    ratings = e.create_df('ratings')
 
-    ratings = extract.create_df(ratings_url, [0,1,2])
+    # Join into single df
+    joined_data = movie.join(
+        ratings.set_index('tconst'), on='tconst', how='inner'
+        ).join(
+        director.set_index('tconst'), on='tconst', how='left'
+        ).join(
+        writer.set_index('tconst'), on='tconst', how='left'
+    )
 
-    movie_ratings = pd.merge(movie, ratings, on='tconst')
+    # Create name df
+    name = e.create_df('name')
 
-    # Group and run aggregations
-    movie_ratings = movie_ratings.groupby(['startYear', 'genres']).agg({
+    # Get top directors by year and genre
+    top_director = joined_data[['tconst', 'startYear', 'genres', 'directors']]
+    top_director.drop_duplicates(inplace=True)
+    top_director = t.group_by_count(top_director, 'tconst')
+    top_director = top_director.join(
+        name.set_index('nconst'), on='directors', how='inner'
+    )
+    top_director.drop(['directors'], axis=1, inplace=True)
+    top_director = t.group_by_join(top_director)
+
+    # Run aggregations count distinct
+    aggregate = {
+        'directors': 'nunique',
+        'writers': 'nunique'
+    }
+
+    result = joined_data.groupby(
+        ['startYear', 'genres']).agg(aggregate).reset_index()
+
+    # Run aggregations sum and mean
+    joined_data.drop(['directors', 'writers'], axis=1, inplace=True)
+    joined_data.drop_duplicates(inplace=True)
+
+    aggregate = {
         'runtimeMinutes': 'mean',
         'averageRating': 'mean',
-        'numVotes': 'sum'}
-        ).reset_index()
+        'numVotes': 'sum',
+    }
 
-    movie_ratings = pd.merge(movie_ratings, movie_director, on=['startYear', 'genres'], how='left').fillna(0)
-    movie_ratings = pd.merge(movie_ratings, movie_writer, on=['startYear', 'genres'], how='left').fillna(0)
+    result_ratings = joined_data.groupby(
+        ['startYear', 'genres']).agg(aggregate).reset_index()
 
-    # Rename columns
-    columns = {'directors':'numDirectors', 'writers':'numWriters'}
-    movie_ratings = transform.rename_cols(movie_ratings, columns)
-    
+    # Add ratings data
+    result = pd.merge(
+        result, result_ratings, on=['startYear', 'genres'], how='left'
+    )
+  
     # Fix data type
     columns = ['runtimeMinutes', 'averageRating']
-    movie_ratings[columns] = movie_ratings[columns].round(2)
-    movie_ratings['startYear'] = pd.to_numeric(movie_ratings['startYear'], errors='coerce')
+    result[columns] = result[columns].round(2)
 
-    # Load into .csv
-    movie_ratings.to_csv('/home/joana/airflow/dags/resultados.csv', index=False)
+    # Add top directors
+    result = pd.merge(
+        result, top_director, on=['startYear', 'genres'], how='left'
+    )
+
+    # Rename columns
+    columns = {
+        'directors':'numDirectors',
+        'writers':'numWriters',
+        'primaryName': 'topDirectors'
+    }
+    result = t.rename_cols(result, columns)
+
+    # Reorder columns
+    columns = [
+        'startYear',
+        'genres',
+        'runtimeMinutes',
+        'averageRating',
+        'numVotes',
+        'numDirectors',
+        'numWriters',
+        'topDirectors'
+    ]
+    result = result[columns]
+
+    result.to_csv('/home/airflow/dags/resultados.csv', index=False)
 
 default_args = {
 	'owner': 'joana',
@@ -81,18 +135,18 @@ default_args = {
 	'email_on_retry': False,
 	'retries': 5,
 	'retry_delay': timedelta(minutes = 1)
-	}
+}
 
 dag = DAG(
 	dag_id = 'movie_dag',
 	default_args = default_args,
 	start_date = datetime(2021,7,7),
 	schedule_interval = timedelta(minutes = 1440)
-	)
+)
 
 task1 =  PythonOperator(
 	task_id = 'run_etl',
 	provide_context = True,
 	python_callable = run_etl,
 	dag = dag
-	)
+)
